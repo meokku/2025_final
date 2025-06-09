@@ -94,6 +94,31 @@ def zoom_eye_region(frame, eye_landmarks, zoom_factor=2.0):
     
     return frame
 
+# 눈의 상대적 위치 계산 함수
+def calculate_relative_eye_position(face_landmarks, iris_index):
+    # 눈의 외곽 랜드마크 인덱스 (왼쪽/오른쪽 눈)
+    EYE_OUTLINE_INDICES = {
+        LEFT_IRIS_INDEX: [362, 263, 373, 380],  # 왼쪽 눈 외곽
+        RIGHT_IRIS_INDEX: [33, 133, 144, 145]   # 오른쪽 눈 외곽
+    }
+    
+    # 홍채 위치
+    iris = face_landmarks.landmark[iris_index]
+    
+    # 눈 외곽 랜드마크 가져오기
+    outline_indices = EYE_OUTLINE_INDICES[iris_index]
+    outline_points = [face_landmarks.landmark[i] for i in outline_indices]
+    
+    # 눈 외곽의 중심점 계산
+    eye_center_x = sum(p.x for p in outline_points) / len(outline_points)
+    eye_center_y = sum(p.y for p in outline_points) / len(outline_points)
+    
+    # 홍채의 상대적 위치 계산 (눈 중심점 기준)
+    relative_x = iris.x - eye_center_x
+    relative_y = iris.y - eye_center_y
+    
+    return relative_x, relative_y
+
 # EAR 계산 함수 정의
 def calculate_ear(eye_landmark_indices, face_landmarks):
     # eye_landmark_indices는 P1~P6에 해당하는 6개의 인덱스를 담은 리스트
@@ -159,20 +184,19 @@ while True:
                 # 특정 랜드마크(선택된 눈 홍채)의 좌표 추출
                 iris_landmark = face_landmarks.landmark[selected_iris_index]
                 
-                # 랜드마크 좌표는 0~1 사이로 정규화되어 있으므로, 실제 픽셀 좌표로 변환
-                iris_x = int(iris_landmark.x * w)
-                iris_y = int(iris_landmark.y * h)
+                # 상대적 눈 위치 계산
+                relative_x, relative_y = calculate_relative_eye_position(face_landmarks, selected_iris_index)
                 
                 if is_calibrating:
-                    # 보정 중일 때, 현재 홍채 위치를 gaze_coords에 추가
-                    gaze_coords_x.append(iris_x)
-                    gaze_coords_y.append(iris_y)
+                    # 보정 중일 때, 현재 상대적 홍채 위치를 gaze_coords에 추가
+                    gaze_coords_x.append(relative_x)
+                    gaze_coords_y.append(relative_y)
 
                 # 보정 완료 -> 실제 커서 위치 조정
                 if calibration_complete and calib_box is not None:
-                    # calib_box의 범위에서, 현재 홍채 위치 비율 계산
-                    x_ratio = (iris_x - calib_box['min_x']) / (calib_box['max_x'] - calib_box['min_x'])
-                    y_ratio = (iris_y - calib_box['min_y']) / (calib_box['max_y'] - calib_box['min_y'])
+                    # calib_box의 범위에서, 현재 상대적 홍채 위치 비율 계산
+                    x_ratio = (relative_x - calib_box['min_x']) / (calib_box['max_x'] - calib_box['min_x'])
+                    y_ratio = (relative_y - calib_box['min_y']) / (calib_box['max_y'] - calib_box['min_y'])
 
                     x_ratio = max(0.0, min(1.0, x_ratio))
                     y_ratio = max(0.0, min(1.0, y_ratio))
@@ -185,10 +209,13 @@ while True:
                     
                     pyautogui.moveTo(smoothed_mx, smoothed_my)
                     
-                    # calib_box 표시
-                    cv2.rectangle(frame, (calib_box['min_x'], calib_box['min_y']), 
-                                (calib_box['max_x'], calib_box['max_y']), (0, 255, 255), 1)
+                    # calib_box 표시 (디버깅용)
+                    cv2.putText(frame, f"Relative X: {relative_x:.3f}, Y: {relative_y:.3f}", 
+                              (50, 100), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 255, 0), 2)
                 
+                # 원본 홍채 위치 표시 (디버깅용)
+                iris_x = int(iris_landmark.x * w)
+                iris_y = int(iris_landmark.y * h)
                 cv2.circle(frame, (iris_x, iris_y), 5, (0, 255, 0), -1)
     else:
         cv2.putText(frame, "No face detected", (50, 50),
