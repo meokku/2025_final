@@ -3,6 +3,7 @@ import pyautogui
 import cv2
 import mediapipe as mp
 import numpy as np
+import time
 
 # 안구 마우스 문제점: 시선과 커서 이동 간의 불일치
 # 이를 조정하기 위해 보정(calibrating) 시행, 관련 변수 설정
@@ -12,16 +13,22 @@ gaze_coords_x = []
 gaze_coords_y = [] 
 calib_box = None # 보정용 box 설정: 추후 calib_box의 범위가 모니터 전체 범위로 확대
 selected_iris_index = None  # 주시안 선택 변수 (아직 지정되지 않음)
+reference_point = None  # 기준점 (중앙 시선 기준)
 
 # 눈 깜빡임 감지용 상수
 EAR_THRESHOLD = 0.23 # 사용자에 맞게 튜닝된 값
-BLINK_CLICK_FRAMES = 5 # 의도적 클릭으로 판단할 프레임 수
+MIN_BLINK_FRAMES = 2  # 최소 깜빡임 프레임 수
+DOUBLE_BLINK_INTERVAL = 0.5  # 연속 깜빡임으로 인식할 최대 시간 간격 (초)
+BLINK_TIMEOUT = 1.0  # 첫 번째 깜빡임 후 대기 시간 (초)
 
 # 커서 움직임이 너무 빠른 것을 방지하기 위해 smoothing factor 설정
 SMOOTHING_FACTOR = 0.2
 
 # 눈 깜빡임 카운터
 blink_counter = 0
+last_blink_time = 0  # 마지막 깜빡임 시간
+is_first_blink = False  # 첫 번째 깜빡임 여부
+is_blinking = False  # 현재 깜빡이는 중인지 여부
 
 # 화면 크기 및 smoothing 좌표 초기화
 screen_w, screen_h = pyautogui.size()
@@ -173,11 +180,34 @@ while True:
             
             if ear < EAR_THRESHOLD:
                 blink_counter += 1
+                if not is_blinking and blink_counter >= MIN_BLINK_FRAMES:
+                    is_blinking = True
             else:
-                if blink_counter > BLINK_CLICK_FRAMES:
-                    pyautogui.click()
-                    print(f"Blink Click! (duration: {blink_counter} frames)")
+                if is_blinking:  # 깜빡임이 끝났을 때
+                    current_time = time.time()
+                    if not is_first_blink:
+                        # 첫 번째 깜빡임 감지
+                        is_first_blink = True
+                        last_blink_time = current_time
+                        print("First blink detected")
+                    else:
+                        # 두 번째 깜빡임 감지
+                        time_diff = current_time - last_blink_time
+                        if time_diff <= DOUBLE_BLINK_INTERVAL:
+                            # 연속 깜빡임으로 인식
+                            pyautogui.click()
+                            print(f"Double blink click! (interval: {time_diff:.3f}s)")
+                        else:
+                            # 시간 간격이 너무 길면 첫 번째 깜빡임으로 리셋
+                            print(f"Blink interval too long: {time_diff:.3f}s")
+                        is_first_blink = False
+                    is_blinking = False
                 blink_counter = 0
+
+            # 첫 번째 깜빡임 후 일정 시간이 지나면 초기화
+            if is_first_blink and (time.time() - last_blink_time) > BLINK_TIMEOUT:
+                print("Blink timeout - resetting")
+                is_first_blink = False
 
             # 눈을 뜨고 있을 때만 커서 위치 업데이트 (클릭 시 커서 고정)
             if blink_counter == 0:
@@ -198,8 +228,13 @@ while True:
                     x_ratio = (relative_x - calib_box['min_x']) / (calib_box['max_x'] - calib_box['min_x'])
                     y_ratio = (relative_y - calib_box['min_y']) / (calib_box['max_y'] - calib_box['min_y'])
 
-                    x_ratio = max(0.0, min(1.0, x_ratio))
-                    y_ratio = max(0.0, min(1.0, y_ratio))
+                    # 비율을 0~1 범위로 제한하고, 약간의 여유 공간 추가
+                    x_ratio = max(-0.1, min(1.1, x_ratio))
+                    y_ratio = max(-0.1, min(1.1, y_ratio))
+
+                    # 비율을 0~1 범위로 정규화
+                    x_ratio = (x_ratio + 0.1) / 1.2
+                    y_ratio = (y_ratio + 0.1) / 1.2
 
                     target_mx, target_my = screen_w * x_ratio, screen_h * y_ratio
                     
@@ -212,6 +247,9 @@ while True:
                     # calib_box 표시 (디버깅용)
                     cv2.putText(frame, f"Relative X: {relative_x:.3f}, Y: {relative_y:.3f}", 
                               (50, 100), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 255, 0), 2)
+                    if reference_point is not None:
+                        cv2.putText(frame, f"Reference X: {reference_point[0]:.3f}, Y: {reference_point[1]:.3f}", 
+                                  (50, 130), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255, 255, 0), 2)
                 
                 # 원본 홍채 위치 표시 (디버깅용)
                 iris_x = int(iris_landmark.x * w)
@@ -290,10 +328,30 @@ while True:
                     calibration_complete = False; calib_box = None
                     print("Calibration failed: No movement detected.")
     
-    # m: 커서 중앙 이동
+    # m: 커서 중앙 이동 및 기준점 재설정
     elif key == ord('m'):
-        screen_w, screen_h = pyautogui.size()
-        pyautogui.moveTo(screen_w / 2, screen_h / 2)
+        if selected_iris_index is not None and face_landmarks is not None:
+            # 현재 눈의 상대적 위치를 기준점으로 설정
+            reference_point = calculate_relative_eye_position(face_landmarks, selected_iris_index)
+            print(f"Reference point set to: {reference_point}")
+            
+            # calib_box가 있다면 기준점을 중심으로 재조정
+            if calib_box is not None:
+                x_range = calib_box['max_x'] - calib_box['min_x']
+                y_range = calib_box['max_y'] - calib_box['min_y']
+                
+                # 기준점을 중심으로 calib_box 재조정
+                calib_box['min_x'] = reference_point[0] - x_range/2
+                calib_box['max_x'] = reference_point[0] + x_range/2
+                calib_box['min_y'] = reference_point[1] - y_range/2
+                calib_box['max_y'] = reference_point[1] + y_range/2
+                
+                print("Calibration box recentered")
+            
+            # 커서를 화면 중앙으로 이동
+            screen_w, screen_h = pyautogui.size()
+            pyautogui.moveTo(screen_w / 2, screen_h / 2)
+            smoothed_mx, smoothed_my = screen_w / 2, screen_h / 2
 
 video.release()
 cv2.destroyAllWindows()
