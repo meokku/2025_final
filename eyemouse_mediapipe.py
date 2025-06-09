@@ -36,8 +36,10 @@ face_mesh = mp_face_mesh.FaceMesh(
     min_tracking_confidence=0.5
 )
 
-# 웹캠 지정
+# 웹캠 지정 및 해상도 설정
 video = cv2.VideoCapture(0)
+video.set(cv2.CAP_PROP_FRAME_WIDTH, 1280)
+video.set(cv2.CAP_PROP_FRAME_HEIGHT, 720)
 
 # 추적할 눈의 랜드마크 인덱스
 LEFT_IRIS_INDEX = 473
@@ -47,13 +49,50 @@ RIGHT_IRIS_INDEX = 468
 EAR_LEFT_EYE_LANDMARKS = [362, 385, 387, 263, 373, 380]
 EAR_RIGHT_EYE_LANDMARKS = [33, 158, 159, 133, 144, 145]
 
-
 # window_normal: 윈도우 크기 조정 가능한 방식
 WINDOW_NAME = 'Eyemouse'
 cv2.namedWindow(WINDOW_NAME, cv2.WINDOW_NORMAL)
+cv2.resizeWindow(WINDOW_NAME, 1280, 720)
 
 # failsafe 해제: 커서 이동 시 화면 밖으로 나가는 경우 eyemouse가 멈추는 상황 방지
 pyautogui.FAILSAFE = False
+
+# 눈 영역 확대 함수
+def zoom_eye_region(frame, eye_landmarks, zoom_factor=2.0):
+    if eye_landmarks is None:
+        return frame
+    
+    # 눈 영역의 중심점 계산
+    center_x = int(eye_landmarks.x * frame.shape[1])
+    center_y = int(eye_landmarks.y * frame.shape[0])
+    
+    # 확대할 영역의 크기 계산
+    zoom_size = 100
+    x1 = max(0, center_x - zoom_size)
+    y1 = max(0, center_y - zoom_size)
+    x2 = min(frame.shape[1], center_x + zoom_size)
+    y2 = min(frame.shape[0], center_y + zoom_size)
+    
+    # 눈 영역 추출 및 확대
+    eye_region = frame[y1:y2, x1:x2]
+    if eye_region.size > 0:
+        eye_region = cv2.resize(eye_region, None, fx=zoom_factor, fy=zoom_factor)
+        
+        # 확대된 영역에서 홍채 위치 계산
+        zoomed_center_x = int((center_x - x1) * zoom_factor)
+        zoomed_center_y = int((center_y - y1) * zoom_factor)
+        
+        # 확대된 영역에 홍채 위치 표시
+        cv2.circle(eye_region, (zoomed_center_x, zoomed_center_y), 5, (0, 255, 0), -1)
+        
+        # 확대된 영역을 원본 프레임에 합성
+        h, w = eye_region.shape[:2]
+        frame[10:10+h, 10:10+w] = eye_region
+        
+        # 확대된 영역 표시
+        cv2.rectangle(frame, (10, 10), (10+w, 10+h), (0, 255, 0), 2)
+    
+    return frame
 
 # EAR 계산 함수 정의
 def calculate_ear(eye_landmark_indices, face_landmarks):
@@ -74,7 +113,6 @@ def calculate_ear(eye_landmark_indices, face_landmarks):
     if hor_dist == 0: return 0.0
     ear = (ver_dist1 + ver_dist2) / (2.0 * hor_dist)
     return ear
-
 
 while True:
     ret, frame = video.read()
@@ -100,6 +138,10 @@ while True:
         
         # 눈을 선택한 후, 보정 및 추후 작업 진행
         if selected_iris_index is not None: 
+            # 선택된 눈 영역 확대
+            iris_landmark = face_landmarks.landmark[selected_iris_index]
+            frame = zoom_eye_region(frame, iris_landmark)
+
             ear_landmarks = EAR_LEFT_EYE_LANDMARKS if selected_iris_index == LEFT_IRIS_INDEX else EAR_RIGHT_EYE_LANDMARKS
             ear = calculate_ear(ear_landmarks, face_landmarks)
             cv2.putText(frame, f"EAR: {ear:.2f}", (w - 150, 50), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 0, 255), 2)
@@ -212,6 +254,11 @@ while True:
 
                     calibration_complete = True
                     print("Calibration complete!"); print("Calibrated Box:", calib_box)
+                    
+                    # 보정 완료 후 커서를 화면 중앙으로 이동
+                    screen_w, screen_h = pyautogui.size()
+                    pyautogui.moveTo(screen_w / 2, screen_h / 2)
+                    smoothed_mx, smoothed_my = screen_w / 2, screen_h / 2
                 else:
                     calibration_complete = False; calib_box = None
                     print("Calibration failed: No movement detected.")

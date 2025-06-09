@@ -2,15 +2,18 @@
 import pyautogui
 import cv2
 import time
-import pyautogui
 
 # 웹캠 지정
 video = cv2.VideoCapture(0)
 
+## 수정 필요한 주요 부분
+## 1. 양쪽 눈 다 커서로 활용됨 -> 커서가 왔다갔다 하는 문제. 처음 실행 시 한쪽 눈만 선택 가능하도록 수정
+## 2. 눈 깜빡임 EAR 사용하여 적용
+
 # harrcascade_eye.xml 지정 -> 눈 및 얼굴 RoI 인식용
 # 얼굴 RoI 인식: 눈만 인식 대상으로 했을 때, 다른 물체(전구)도 눈으로 인식하는 부분 개선
-face_cascade = cv2.CascadeClassifier('haarcascade_frontalface_default.xml')
-eye_cascade = cv2.CascadeClassifier("haarcascade_eye.xml")
+face_cascade = cv2.CascadeClassifier(cv2.data.haarcascades + 'haarcascade_frontalface_default.xml')
+eye_cascade = cv2.CascadeClassifier(cv2.data.haarcascades + 'haarcascade_eye.xml')
 
 while True:
     ret, frame = video.read()
@@ -125,5 +128,5 @@ while True:
     if cv2.waitKey(20) == ord('q'):
         break
 
-cap.release()
+# cap.release()
 cv2.destroyAllWindows()
